@@ -3,46 +3,47 @@ import "./App.css";
 
 function App() {
   const canvasRef = useRef(null);
+  const previewCanvasRef = useRef(null);
   const [regions, setRegions] = useState([]);
+  const isVerticalRef = useRef(true);
   const [useVerticalSplit, setUseVerticalSplit] = useState(true);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   const earthTones = [
-    "#C9987E",
-    "#D2B48C",
-    "#BC9C7A",
-    "#D4A373",
-    "#CEB898",
-    "#C7A58D",
-    "#B6A27C",
-    "#D6A07B",
-    "#E3BCA2",
-    "#CFA68B",
-    "#B5BDA3",
-    "#A3B18A",
-    "#CCD5AE",
-    "#BFAFA2",
-    "#D8A29D",
+    "#628b8a",
+    "#628B7B",
+    "#719382",
+    "#AFBA8F",
+    "#E9D191",
+    "#E7B67E",
+    "#DF9771",
+    "#D48065",
+    "#C96656",
+    "#B65646",
+    "#A24636",
+    "#8F3626",
+    "#712616",
   ];
 
   const ditheringPatterns = [
     (i, j) =>
       ((i * 0.5 + 3 * j) * 1) % 2 === 0 && ((j * 0.5 + 3 * i) * 1) % 7 === 0,
-    // (i, j) => (i * 0.5 + 3 * j) % 2 === 0 && (j * 0.5 + 3 * i) % 7 === 0,
-    // (i, j) => (i + 3 * j) % 2 === 0 && ((j + 3 * i) / 2) % 4 === 0,
-    // (i, j) => (Math.floor(i / 8) + Math.floor(j / 4)) % 2 === 0,
-    // (i, j) => (Math.floor(i / 2) + Math.floor(j / 2)) % 7 === 1,
-    // (i, j) => (Math.floor(i / 2) + Math.floor(j / 8)) % 3 === 0,
-    // (i, j) => (Math.floor(i / 2) + Math.floor(j / 8)) % 2 === 0,
-    // (i, j) => (i + j) % 12 > 6,
-    // (i, j) => i % 16 < j % 16,
-    // (i, j) => (i + j) % 6 < 3,
-    // (i, j) => (i ^ j) % 10 === 0,
-    // (i, j) => (Math.floor(i / 2) * Math.floor(j / 2)) % 16 === 0,
-    // (i, j) => i % 4 === 0,
-    // (i, j) => Math.floor(i / 2) % 4 === 0 && Math.floor(j / 2) % 4 === 0,
-    // (i, j) => i % 8 === 0 && j % 8 === 0,
-    // (i, j) => (Math.floor(i / 2) * Math.floor(j / 2)) % 2 === 0,
-    // (i, j) => (Math.floor(i / 2) * Math.floor(j / 2)) % 2 === 1,
+    (i, j) => (i * 0.5 + 3 * j) % 2 === 0 && (j * 0.5 + 3 * i) % 7 === 0,
+    (i, j) => (i + 3 * j) % 2 === 0 && ((j + 3 * i) / 2) % 4 === 0,
+    (i, j) => (Math.floor(i / 8) + Math.floor(j / 4)) % 2 === 0,
+    (i, j) => (Math.floor(i / 2) + Math.floor(j / 2)) % 7 === 1,
+    (i, j) => (Math.floor(i / 2) + Math.floor(j / 8)) % 3 === 0,
+    (i, j) => (Math.floor(i / 2) + Math.floor(j / 8)) % 2 === 0,
+    (i, j) => (i + j) % 12 > 6,
+    (i, j) => i % 16 < j % 16,
+    (i, j) => (i + j) % 6 < 3,
+    (i, j) => (i ^ j) % 10 === 0,
+    (i, j) => (Math.floor(i / 2) * Math.floor(j / 2)) % 16 === 0,
+    (i, j) => i % 4 === 0,
+    (i, j) => Math.floor(i / 2) % 4 === 0 && Math.floor(j / 2) % 4 === 0,
+    (i, j) => i % 8 === 0 && j % 8 === 0,
+    (i, j) => (Math.floor(i / 2) * Math.floor(j / 2)) % 2 === 0,
+    (i, j) => (Math.floor(i / 2) * Math.floor(j / 2)) % 2 === 1,
   ];
 
   const getRandomColor = () => {
@@ -67,6 +68,47 @@ function App() {
     }
   };
 
+  const drawPreviewLine = (ctx, x, y) => {
+    const canvas = previewCanvasRef.current;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.globalCompositeOperation = "difference";
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+
+    // Draw the main line
+    ctx.beginPath();
+    if (useVerticalSplit) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+    } else {
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+    }
+    ctx.stroke();
+
+    // Draw the square indicator
+    const squareSize = 6;
+    ctx.fillStyle = "white";
+    if (useVerticalSplit) {
+      ctx.fillRect(
+        x - squareSize / 2,
+        y - squareSize / 2,
+        squareSize,
+        squareSize
+      );
+    } else {
+      ctx.fillRect(
+        x - squareSize / 2,
+        y - squareSize / 2,
+        squareSize,
+        squareSize
+      );
+    }
+
+    ctx.restore();
+  };
+
   const drawAllRegions = () => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -78,8 +120,11 @@ function App() {
 
   const initializeCanvas = () => {
     const canvas = canvasRef.current;
+    const previewCanvas = previewCanvasRef.current;
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
+    previewCanvas.width = window.innerWidth;
+    previewCanvas.height = window.innerHeight;
 
     const initialColor = getRandomColor();
     const initialPattern = getRandomPattern();
@@ -95,6 +140,47 @@ function App() {
     ]);
   };
 
+  const handleKeyPress = (e) => {
+    if (e.key.toLowerCase() === "a") {
+      isVerticalRef.current = !isVerticalRef.current;
+      setUseVerticalSplit(isVerticalRef.current);
+    }
+  };
+
+  // Effect to redraw the preview line when orientation changes
+  useEffect(() => {
+    const ctx = previewCanvasRef.current.getContext("2d");
+    const canvas = canvasRef.current;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.globalCompositeOperation = "difference";
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+
+    // Draw the main line with current orientation
+    ctx.beginPath();
+    if (isVerticalRef.current) {
+      ctx.moveTo(mousePos.x, 0);
+      ctx.lineTo(mousePos.x, canvas.height);
+    } else {
+      ctx.moveTo(0, mousePos.y);
+      ctx.lineTo(canvas.width, mousePos.y);
+    }
+    ctx.stroke();
+
+    // Draw the square indicator
+    const squareSize = 6;
+    ctx.fillStyle = "white";
+    ctx.fillRect(
+      mousePos.x - squareSize / 2,
+      mousePos.y - squareSize / 2,
+      squareSize,
+      squareSize
+    );
+
+    ctx.restore();
+  }, [useVerticalSplit, mousePos.x, mousePos.y]);
+
   const handleClick = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -109,7 +195,7 @@ function App() {
         const newPattern = getRandomPattern();
         let newRegion1, newRegion2;
 
-        if (useVerticalSplit) {
+        if (isVerticalRef.current) {
           const relX = mx;
           newRegion1 = {
             x: r.x,
@@ -149,16 +235,28 @@ function App() {
 
         newRegions.splice(i, 1, newRegion1, newRegion2);
         setRegions(newRegions);
-        setUseVerticalSplit(!useVerticalSplit);
         break;
       }
     }
   };
 
+  const handleMouseMove = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setMousePos({ x, y });
+    drawPreviewLine(previewCanvasRef.current.getContext("2d"), x, y);
+  };
+
   useEffect(() => {
     initializeCanvas();
     window.addEventListener("resize", initializeCanvas);
-    return () => window.removeEventListener("resize", initializeCanvas);
+    window.addEventListener("keydown", handleKeyPress);
+    return () => {
+      window.removeEventListener("resize", initializeCanvas);
+      window.removeEventListener("keydown", handleKeyPress);
+    };
   }, []);
 
   useEffect(() => {
@@ -166,16 +264,32 @@ function App() {
   }, [regions]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      onClick={handleClick}
-      style={{
-        display: "block",
-        background: "black",
-        width: "100vw",
-        height: "100vh",
-      }}
-    />
+    <div style={{ position: "relative" }}>
+      <canvas
+        ref={canvasRef}
+        onClick={handleClick}
+        onMouseMove={handleMouseMove}
+        style={{
+          display: "block",
+          background: "black",
+          width: "100vw",
+          height: "100vh",
+          cursor: "none",
+        }}
+      />
+      <canvas
+        ref={previewCanvasRef}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          pointerEvents: "none",
+          width: "100vw",
+          height: "100vh",
+          background: "transparent",
+        }}
+      />
+    </div>
   );
 }
 
