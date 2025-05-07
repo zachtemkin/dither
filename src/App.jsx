@@ -8,6 +8,10 @@ function App() {
   const isVerticalRef = useRef(true);
   const [useVerticalSplit, setUseVerticalSplit] = useState(true);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const currentMousePosRef = useRef({ x: 0, y: 0 }); // Track current mouse position
+  const [isCursorActive, setIsCursorActive] = useState(true);
+  const [isShiftHeld, setIsShiftHeld] = useState(false);
+  const lockedCoordinateRef = useRef(null);
 
   const earthTones = [
     "#628b8a",
@@ -126,6 +130,12 @@ function App() {
     previewCanvas.width = window.innerWidth;
     previewCanvas.height = window.innerHeight;
 
+    // Initialize mouse position to center of canvas
+    const initialX = canvas.width / 2;
+    const initialY = canvas.height / 2;
+    console.log("Initializing mouse position:", { x: initialX, y: initialY });
+    setMousePos({ x: initialX, y: initialY });
+
     const initialColor = getRandomColor();
     const initialPattern = getRandomPattern();
     setRegions([
@@ -140,15 +150,86 @@ function App() {
     ]);
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key.toLowerCase() === "a") {
-      isVerticalRef.current = !isVerticalRef.current;
-      setUseVerticalSplit(isVerticalRef.current);
+  const handleKeyDown = (e) => {
+    if (e.key === "Shift") {
+      // Store the current coordinate based on orientation
+      if (isVerticalRef.current) {
+        lockedCoordinateRef.current = currentMousePosRef.current.x;
+      } else {
+        lockedCoordinateRef.current = currentMousePosRef.current.y;
+      }
+      setIsShiftHeld(true);
+    } else if (e.key.toLowerCase() === "a") {
+      if (!isCursorActive) {
+        setIsCursorActive(true);
+      } else {
+        isVerticalRef.current = !isVerticalRef.current;
+        setUseVerticalSplit(isVerticalRef.current);
+      }
+    } else if (e.key === "Escape") {
+      setIsCursorActive(false);
+      // Clear the preview canvas
+      const ctx = previewCanvasRef.current.getContext("2d");
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
     }
   };
 
+  const handleKeyUp = (e) => {
+    if (e.key === "Shift") {
+      setIsShiftHeld(false);
+      lockedCoordinateRef.current = null;
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isCursorActive) return;
+
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const newX = e.clientX - rect.left;
+    const newY = e.clientY - rect.top;
+
+    // Update the current mouse position ref
+    currentMousePosRef.current = { x: newX, y: newY };
+
+    if (isShiftHeld && lockedCoordinateRef.current !== null) {
+      // Use the locked coordinate for the primary direction
+      if (isVerticalRef.current) {
+        setMousePos({
+          x: lockedCoordinateRef.current,
+          y: newY,
+        });
+      } else {
+        setMousePos({
+          x: newX,
+          y: lockedCoordinateRef.current,
+        });
+      }
+    } else {
+      setMousePos({ x: newX, y: newY });
+    }
+  };
+
+  useEffect(() => {
+    initializeCanvas();
+    window.addEventListener("resize", initializeCanvas);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("resize", initializeCanvas);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    drawAllRegions();
+  }, [regions]);
+
   // Effect to redraw the preview line when orientation changes
   useEffect(() => {
+    if (!isCursorActive) return;
+
     const ctx = previewCanvasRef.current.getContext("2d");
     const canvas = canvasRef.current;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -160,28 +241,61 @@ function App() {
     // Draw the main line with current orientation
     ctx.beginPath();
     if (isVerticalRef.current) {
-      ctx.moveTo(mousePos.x, 0);
-      ctx.lineTo(mousePos.x, canvas.height);
+      const x =
+        isShiftHeld && lockedCoordinateRef.current !== null
+          ? lockedCoordinateRef.current
+          : currentMousePosRef.current.x;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
     } else {
-      ctx.moveTo(0, mousePos.y);
-      ctx.lineTo(canvas.width, mousePos.y);
+      const y =
+        isShiftHeld && lockedCoordinateRef.current !== null
+          ? lockedCoordinateRef.current
+          : currentMousePosRef.current.y;
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
     }
     ctx.stroke();
 
     // Draw the square indicator
     const squareSize = 6;
     ctx.fillStyle = "white";
-    ctx.fillRect(
-      mousePos.x - squareSize / 2,
-      mousePos.y - squareSize / 2,
-      squareSize,
-      squareSize
-    );
+    if (isShiftHeld && lockedCoordinateRef.current !== null) {
+      // When shift is held, keep the square on the line
+      if (isVerticalRef.current) {
+        ctx.fillRect(
+          lockedCoordinateRef.current - squareSize / 2,
+          currentMousePosRef.current.y - squareSize / 2,
+          squareSize,
+          squareSize
+        );
+      } else {
+        ctx.fillRect(
+          currentMousePosRef.current.x - squareSize / 2,
+          lockedCoordinateRef.current - squareSize / 2,
+          squareSize,
+          squareSize
+        );
+      }
+    } else {
+      // When shift is not held, follow the mouse
+      ctx.fillRect(
+        currentMousePosRef.current.x - squareSize / 2,
+        currentMousePosRef.current.y - squareSize / 2,
+        squareSize,
+        squareSize
+      );
+    }
 
     ctx.restore();
-  }, [useVerticalSplit, mousePos.x, mousePos.y]);
+  }, [useVerticalSplit, mousePos.x, mousePos.y, isCursorActive, isShiftHeld]);
 
   const handleClick = (e) => {
+    if (!isCursorActive) {
+      setIsCursorActive(true);
+      return;
+    }
+
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
@@ -196,7 +310,10 @@ function App() {
         let newRegion1, newRegion2;
 
         if (isVerticalRef.current) {
-          const relX = mx;
+          const relX =
+            isShiftHeld && lockedCoordinateRef.current !== null
+              ? lockedCoordinateRef.current
+              : mx;
           newRegion1 = {
             x: r.x,
             y: r.y,
@@ -214,7 +331,10 @@ function App() {
             pattern: newPattern,
           };
         } else {
-          const relY = my;
+          const relY =
+            isShiftHeld && lockedCoordinateRef.current !== null
+              ? lockedCoordinateRef.current
+              : my;
           newRegion1 = {
             x: r.x,
             y: r.y,
@@ -240,29 +360,6 @@ function App() {
     }
   };
 
-  const handleMouseMove = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    setMousePos({ x, y });
-    drawPreviewLine(previewCanvasRef.current.getContext("2d"), x, y);
-  };
-
-  useEffect(() => {
-    initializeCanvas();
-    window.addEventListener("resize", initializeCanvas);
-    window.addEventListener("keydown", handleKeyPress);
-    return () => {
-      window.removeEventListener("resize", initializeCanvas);
-      window.removeEventListener("keydown", handleKeyPress);
-    };
-  }, []);
-
-  useEffect(() => {
-    drawAllRegions();
-  }, [regions]);
-
   return (
     <div style={{ position: "relative" }}>
       <canvas
@@ -274,7 +371,7 @@ function App() {
           background: "black",
           width: "100vw",
           height: "100vh",
-          cursor: "none",
+          cursor: isCursorActive ? "none" : "default",
         }}
       />
       <canvas
