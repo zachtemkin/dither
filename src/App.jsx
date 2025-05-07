@@ -13,6 +13,9 @@ function App() {
   const [isShiftHeld, setIsShiftHeld] = useState(false);
   const lockedCoordinateRef = useRef(null);
   const [mode, setMode] = useState("classic"); // default to classic
+  const [hoveredRegionIdx, setHoveredRegionIdx] = useState(null);
+  const hoveredRegionIdxRef = useRef(null);
+  const regionsRef = useRef(regions);
 
   const bayerMatrix = [
     [0, 48, 12, 60, 3, 51, 15, 63],
@@ -86,19 +89,27 @@ function App() {
     return earthTones[Math.floor(Math.random() * earthTones.length)];
   };
 
-  const getRandomPattern = () => {
-    return ditheringPatterns[
-      Math.floor(Math.random() * ditheringPatterns.length)
-    ];
+  const getRandomPatternIdx = () => {
+    return Math.floor(Math.random() * ditheringPatterns.length);
   };
 
   const getRandomBrightness = () => {
     return Math.random(); // Returns a value between 0 and 1
   };
 
-  const drawDitheredRect = (ctx, x, y, w, h, color, patternFn, brightness) => {
-    if (mode === "pattern") {
-      // Original pattern-based dithering
+  const drawDitheredRect = (
+    ctx,
+    x,
+    y,
+    w,
+    h,
+    color,
+    patternIdx,
+    brightness,
+    regionType
+  ) => {
+    if (regionType === "pattern") {
+      const patternFn = ditheringPatterns[patternIdx];
       for (let i = 0; i < w; i++) {
         for (let j = 0; j < h; j++) {
           if (patternFn(i % 32, j % 32)) {
@@ -107,10 +118,9 @@ function App() {
           }
         }
       }
-    } else if (mode === "classic") {
-      // Classic (Bayer) pattern dithering
+    } else if (regionType === "classic") {
       const matrixSize = 8;
-      const scale = 2; // Adjust for desired pattern size
+      const scale = 2;
       for (let i = 0; i < w; i += scale) {
         for (let j = 0; j < h; j += scale) {
           const threshold =
@@ -177,8 +187,9 @@ function App() {
         r.w,
         r.h,
         r.color,
-        r.pattern,
-        r.brightness
+        r.patternIdx,
+        r.brightness,
+        r.type
       );
     }
   };
@@ -198,7 +209,7 @@ function App() {
     setMousePos({ x: initialX, y: initialY });
 
     const initialColor = getRandomColor();
-    const initialPattern = getRandomPattern();
+    const initialPatternIdx = getRandomPatternIdx();
     const initialBrightness = getRandomBrightness();
     setRegions([
       {
@@ -207,11 +218,19 @@ function App() {
         w: canvas.width,
         h: canvas.height,
         color: initialColor,
-        pattern: initialPattern,
+        patternIdx: initialPatternIdx,
         brightness: initialBrightness,
+        type: mode,
       },
     ]);
   };
+
+  useEffect(() => {
+    hoveredRegionIdxRef.current = hoveredRegionIdx;
+  }, [hoveredRegionIdx]);
+  useEffect(() => {
+    regionsRef.current = regions;
+  }, [regions]);
 
   const handleKeyDown = (e) => {
     if (e.key === "Shift") {
@@ -222,18 +241,85 @@ function App() {
         lockedCoordinateRef.current = currentMousePosRef.current.y;
       }
       setIsShiftHeld(true);
-    } else if (e.key.toLowerCase() === "a") {
+      return;
+    }
+    if (e.key.toLowerCase() === "a") {
       if (!isCursorActive) {
         setIsCursorActive(true);
       } else {
         isVerticalRef.current = !isVerticalRef.current;
         setUseVerticalSplit(isVerticalRef.current);
       }
-    } else if (e.key === "Escape") {
+      return;
+    }
+    if (e.key === "Escape") {
       setIsCursorActive(false);
       // Clear the preview canvas
       const ctx = previewCanvasRef.current.getContext("2d");
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      return;
+    }
+    if (hoveredRegionIdxRef.current === null) return;
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      e.preventDefault();
+    }
+    const region = regionsRef.current[hoveredRegionIdxRef.current];
+    if (!region) return;
+    let newRegions = [...regionsRef.current];
+    // Left/Right always change color
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const currentIdx = earthTones.indexOf(region.color);
+      let newIdx;
+      if (e.key === "ArrowLeft") {
+        newIdx = (currentIdx - 1 + earthTones.length) % earthTones.length;
+      } else {
+        newIdx = (currentIdx + 1) % earthTones.length;
+      }
+      newRegions[hoveredRegionIdxRef.current] = {
+        ...region,
+        color: earthTones[newIdx],
+      };
+      setRegions(newRegions);
+      return;
+    }
+    // Up/Down are region-type-specific
+    if (region.type === "classic") {
+      if (e.key === "ArrowUp") {
+        const newBrightness = Math.min(1, (region.brightness ?? 0) + 0.05);
+        newRegions[hoveredRegionIdxRef.current] = {
+          ...region,
+          brightness: newBrightness,
+        };
+        setRegions(newRegions);
+        return;
+      } else if (e.key === "ArrowDown") {
+        const newBrightness = Math.max(0, (region.brightness ?? 0) - 0.05);
+        newRegions[hoveredRegionIdxRef.current] = {
+          ...region,
+          brightness: newBrightness,
+        };
+        setRegions(newRegions);
+        return;
+      }
+    }
+    if (region.type === "pattern") {
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        const currentIdx = region.patternIdx;
+        let newIdx = currentIdx;
+        if (e.key === "ArrowUp") {
+          newIdx = (currentIdx + 1) % ditheringPatterns.length;
+        } else if (e.key === "ArrowDown") {
+          newIdx =
+            (currentIdx - 1 + ditheringPatterns.length) %
+            ditheringPatterns.length;
+        }
+        newRegions[hoveredRegionIdxRef.current] = {
+          ...region,
+          patternIdx: newIdx,
+        };
+        setRegions(newRegions);
+        return;
+      }
     }
   };
 
@@ -254,6 +340,22 @@ function App() {
 
     // Update the current mouse position ref
     currentMousePosRef.current = { x: newX, y: newY };
+
+    // Find hovered region
+    let foundIdx = null;
+    for (let i = 0; i < regions.length; i++) {
+      const r = regions[i];
+      if (
+        newX >= r.x &&
+        newX <= r.x + r.w &&
+        newY >= r.y &&
+        newY <= r.y + r.h
+      ) {
+        foundIdx = i;
+        break;
+      }
+    }
+    setHoveredRegionIdx(foundIdx);
 
     if (isShiftHeld && lockedCoordinateRef.current !== null) {
       // Use the locked coordinate for the primary direction
@@ -374,7 +476,7 @@ function App() {
       const r = newRegions[i];
       if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
         const newColor = getRandomColor();
-        const newPattern = getRandomPattern();
+        const newPatternIdx = getRandomPatternIdx();
         const newBrightness = getRandomBrightness();
         let newRegion1, newRegion2;
 
@@ -389,8 +491,9 @@ function App() {
             w: relX - r.x,
             h: r.h,
             color: r.color,
-            pattern: r.pattern,
+            patternIdx: r.patternIdx,
             brightness: r.brightness,
+            type: r.type,
           };
           newRegion2 = {
             x: relX,
@@ -398,8 +501,9 @@ function App() {
             w: r.x + r.w - relX,
             h: r.h,
             color: newColor,
-            pattern: newPattern,
+            patternIdx: newPatternIdx,
             brightness: newBrightness,
+            type: mode,
           };
         } else {
           const relY =
@@ -412,8 +516,9 @@ function App() {
             w: r.w,
             h: relY - r.y,
             color: r.color,
-            pattern: r.pattern,
+            patternIdx: r.patternIdx,
             brightness: r.brightness,
+            type: r.type,
           };
           newRegion2 = {
             x: r.x,
@@ -421,8 +526,9 @@ function App() {
             w: r.w,
             h: r.y + r.h - relY,
             color: newColor,
-            pattern: newPattern,
+            patternIdx: newPatternIdx,
             brightness: newBrightness,
+            type: mode,
           };
         }
 
