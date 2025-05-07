@@ -97,18 +97,8 @@ function App() {
     return Math.random(); // Returns a value between 0 and 1
   };
 
-  const drawDitheredRect = (
-    ctx,
-    x,
-    y,
-    w,
-    h,
-    color,
-    patternIdx,
-    brightness,
-    regionType
-  ) => {
-    if (regionType === "pattern") {
+  const drawDitheredRect = (ctx, x, y, w, h, color, patternIdx, brightness) => {
+    if (mode === "pattern") {
       const patternFn = ditheringPatterns[patternIdx];
       for (let i = 0; i < w; i++) {
         for (let j = 0; j < h; j++) {
@@ -118,7 +108,7 @@ function App() {
           }
         }
       }
-    } else if (regionType === "classic") {
+    } else if (mode === "classic") {
       const matrixSize = 8;
       const scale = 2;
       for (let i = 0; i < w; i += scale) {
@@ -188,8 +178,7 @@ function App() {
         r.h,
         r.color,
         r.patternIdx,
-        r.brightness,
-        r.type
+        r.brightness
       );
     }
   };
@@ -220,7 +209,6 @@ function App() {
         color: initialColor,
         patternIdx: initialPatternIdx,
         brightness: initialBrightness,
-        type: mode,
       },
     ]);
   };
@@ -234,7 +222,6 @@ function App() {
 
   const handleKeyDown = (e) => {
     if (e.key === "Shift") {
-      // Store the current coordinate based on orientation
       if (isVerticalRef.current) {
         lockedCoordinateRef.current = currentMousePosRef.current.x;
       } else {
@@ -254,7 +241,6 @@ function App() {
     }
     if (e.key === "Escape") {
       setIsCursorActive(false);
-      // Clear the preview canvas
       const ctx = previewCanvasRef.current.getContext("2d");
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       return;
@@ -282,44 +268,32 @@ function App() {
       setRegions(newRegions);
       return;
     }
-    // Up/Down are region-type-specific
-    if (region.type === "classic") {
+    // Up/Down always change both brightness and patternIdx
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      // Brightness
+      let newBrightness = region.brightness;
       if (e.key === "ArrowUp") {
-        const newBrightness = Math.min(1, (region.brightness ?? 0) + 0.05);
-        newRegions[hoveredRegionIdxRef.current] = {
-          ...region,
-          brightness: newBrightness,
-        };
-        setRegions(newRegions);
-        return;
+        newBrightness = Math.min(1, (region.brightness ?? 0) + 0.05);
       } else if (e.key === "ArrowDown") {
-        const newBrightness = Math.max(0, (region.brightness ?? 0) - 0.05);
-        newRegions[hoveredRegionIdxRef.current] = {
-          ...region,
-          brightness: newBrightness,
-        };
-        setRegions(newRegions);
-        return;
+        newBrightness = Math.max(0, (region.brightness ?? 0) - 0.05);
       }
-    }
-    if (region.type === "pattern") {
-      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-        const currentIdx = region.patternIdx;
-        let newIdx = currentIdx;
-        if (e.key === "ArrowUp") {
-          newIdx = (currentIdx + 1) % ditheringPatterns.length;
-        } else if (e.key === "ArrowDown") {
-          newIdx =
-            (currentIdx - 1 + ditheringPatterns.length) %
-            ditheringPatterns.length;
-        }
-        newRegions[hoveredRegionIdxRef.current] = {
-          ...region,
-          patternIdx: newIdx,
-        };
-        setRegions(newRegions);
-        return;
+      // Pattern
+      const currentIdx = region.patternIdx;
+      let newPatternIdx = currentIdx;
+      if (e.key === "ArrowUp") {
+        newPatternIdx = (currentIdx + 1) % ditheringPatterns.length;
+      } else if (e.key === "ArrowDown") {
+        newPatternIdx =
+          (currentIdx - 1 + ditheringPatterns.length) %
+          ditheringPatterns.length;
       }
+      newRegions[hoveredRegionIdxRef.current] = {
+        ...region,
+        brightness: newBrightness,
+        patternIdx: newPatternIdx,
+      };
+      setRegions(newRegions);
+      return;
     }
   };
 
@@ -389,12 +363,7 @@ function App() {
 
   useEffect(() => {
     drawAllRegions();
-  }, [regions]);
-
-  // Effect to redraw all regions when mode changes
-  useEffect(() => {
-    drawAllRegions();
-  }, [mode]);
+  }, [regions, mode]);
 
   // Effect to redraw the preview line when orientation changes
   useEffect(() => {
@@ -493,7 +462,6 @@ function App() {
             color: r.color,
             patternIdx: r.patternIdx,
             brightness: r.brightness,
-            type: r.type,
           };
           newRegion2 = {
             x: relX,
@@ -503,7 +471,6 @@ function App() {
             color: newColor,
             patternIdx: newPatternIdx,
             brightness: newBrightness,
-            type: mode,
           };
         } else {
           const relY =
@@ -518,7 +485,6 @@ function App() {
             color: r.color,
             patternIdx: r.patternIdx,
             brightness: r.brightness,
-            type: r.type,
           };
           newRegion2 = {
             x: r.x,
@@ -528,7 +494,6 @@ function App() {
             color: newColor,
             patternIdx: newPatternIdx,
             brightness: newBrightness,
-            type: mode,
           };
         }
 
