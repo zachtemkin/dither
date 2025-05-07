@@ -12,6 +12,18 @@ function App() {
   const [isCursorActive, setIsCursorActive] = useState(true);
   const [isShiftHeld, setIsShiftHeld] = useState(false);
   const lockedCoordinateRef = useRef(null);
+  const [mode, setMode] = useState("classic"); // default to classic
+
+  const bayerMatrix = [
+    [0, 48, 12, 60, 3, 51, 15, 63],
+    [32, 16, 44, 28, 35, 19, 47, 31],
+    [8, 56, 4, 52, 11, 59, 7, 55],
+    [40, 24, 36, 20, 43, 27, 39, 23],
+    [2, 50, 14, 62, 1, 49, 13, 61],
+    [34, 18, 46, 30, 33, 17, 45, 29],
+    [10, 58, 6, 54, 9, 57, 5, 53],
+    [42, 26, 38, 22, 41, 25, 37, 21],
+  ];
 
   const earthTones = [
     "#628b8a",
@@ -27,6 +39,26 @@ function App() {
     "#A24636",
     "#8F3626",
     "#712616",
+    "#7F9A89",
+    "#8BA38B",
+    "#98AD8D",
+    "#A6B78F",
+    "#B4C191",
+    "#C2CB93",
+    "#D0D595",
+    "#B8BEA3",
+    "#A8B495",
+    "#98A987",
+    "#889F79",
+    "#78956B",
+    "#688B5D",
+    "#58814F",
+    "#487741",
+    "#386D33",
+    "#286325",
+    "#185917",
+    "#084F09",
+    "#084F09",
   ];
 
   const ditheringPatterns = [
@@ -60,13 +92,33 @@ function App() {
     ];
   };
 
-  const drawDitheredRect = (ctx, x, y, w, h, color, patternFn) => {
-    // const scale = 4; // Scale factor for pixels
-    for (let i = 0; i < w; i++) {
-      for (let j = 0; j < h; j++) {
-        if (patternFn(i % 32, j % 32)) {
-          ctx.fillStyle = color;
-          ctx.fillRect(x + i, y + j, 1, 1);
+  const getRandomBrightness = () => {
+    return Math.random(); // Returns a value between 0 and 1
+  };
+
+  const drawDitheredRect = (ctx, x, y, w, h, color, patternFn, brightness) => {
+    if (mode === "pattern") {
+      // Original pattern-based dithering
+      for (let i = 0; i < w; i++) {
+        for (let j = 0; j < h; j++) {
+          if (patternFn(i % 32, j % 32)) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x + i, y + j, 1, 1);
+          }
+        }
+      }
+    } else if (mode === "classic") {
+      // Classic (Bayer) pattern dithering
+      const matrixSize = 8;
+      const scale = 2; // Adjust for desired pattern size
+      for (let i = 0; i < w; i += scale) {
+        for (let j = 0; j < h; j += scale) {
+          const threshold =
+            bayerMatrix[Math.floor(j / scale) % matrixSize][
+              Math.floor(i / scale) % matrixSize
+            ] / 64;
+          ctx.fillStyle = brightness > threshold ? "black" : color;
+          ctx.fillRect(x + i, y + j, scale, scale);
         }
       }
     }
@@ -118,7 +170,16 @@ function App() {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (const r of regions) {
-      drawDitheredRect(ctx, r.x, r.y, r.w, r.h, r.color, r.pattern);
+      drawDitheredRect(
+        ctx,
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        r.color,
+        r.pattern,
+        r.brightness
+      );
     }
   };
 
@@ -138,6 +199,7 @@ function App() {
 
     const initialColor = getRandomColor();
     const initialPattern = getRandomPattern();
+    const initialBrightness = getRandomBrightness();
     setRegions([
       {
         x: 0,
@@ -146,6 +208,7 @@ function App() {
         h: canvas.height,
         color: initialColor,
         pattern: initialPattern,
+        brightness: initialBrightness,
       },
     ]);
   };
@@ -225,6 +288,11 @@ function App() {
   useEffect(() => {
     drawAllRegions();
   }, [regions]);
+
+  // Effect to redraw all regions when mode changes
+  useEffect(() => {
+    drawAllRegions();
+  }, [mode]);
 
   // Effect to redraw the preview line when orientation changes
   useEffect(() => {
@@ -307,6 +375,7 @@ function App() {
       if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) {
         const newColor = getRandomColor();
         const newPattern = getRandomPattern();
+        const newBrightness = getRandomBrightness();
         let newRegion1, newRegion2;
 
         if (isVerticalRef.current) {
@@ -321,6 +390,7 @@ function App() {
             h: r.h,
             color: r.color,
             pattern: r.pattern,
+            brightness: r.brightness,
           };
           newRegion2 = {
             x: relX,
@@ -329,6 +399,7 @@ function App() {
             h: r.h,
             color: newColor,
             pattern: newPattern,
+            brightness: newBrightness,
           };
         } else {
           const relY =
@@ -342,6 +413,7 @@ function App() {
             h: relY - r.y,
             color: r.color,
             pattern: r.pattern,
+            brightness: r.brightness,
           };
           newRegion2 = {
             x: r.x,
@@ -350,6 +422,7 @@ function App() {
             h: r.y + r.h - relY,
             color: newColor,
             pattern: newPattern,
+            brightness: newBrightness,
           };
         }
 
@@ -362,6 +435,40 @@ function App() {
 
   return (
     <div style={{ position: "relative" }}>
+      <div
+        style={{
+          position: "absolute",
+          top: 20,
+          right: 20,
+          zIndex: 1000,
+          display: "flex",
+          gap: "10px",
+        }}>
+        <button
+          onClick={() => setMode("classic")}
+          style={{
+            padding: "8px 16px",
+            backgroundColor: mode === "classic" ? "#fff" : "#666",
+            color: mode === "classic" ? "black" : "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer",
+          }}>
+          Classic Mode
+        </button>
+        <button
+          onClick={() => setMode("pattern")}
+          style={{
+            padding: "8px 16px",
+            backgroundColor: mode === "pattern" ? "#fff" : "#666",
+            color: mode === "pattern" ? "black" : "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer",
+          }}>
+          Pattern Mode
+        </button>
+      </div>
       <canvas
         ref={canvasRef}
         onClick={handleClick}
