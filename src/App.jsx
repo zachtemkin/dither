@@ -16,6 +16,7 @@ function App() {
   const [hoveredRegionIdx, setHoveredRegionIdx] = useState(null);
   const hoveredRegionIdxRef = useRef(null);
   const regionsRef = useRef(regions);
+  const [scale, setScale] = useState(2); // For classic mode Bayer scale
 
   const bayerMatrix = [
     [0, 48, 12, 60, 3, 51, 15, 63],
@@ -130,7 +131,6 @@ function App() {
       }
     } else if (mode === "classic") {
       const matrixSize = 8;
-      const scale = 2;
       for (let i = 0; i < w; i += scale) {
         for (let j = 0; j < h; j += scale) {
           const threshold =
@@ -265,6 +265,14 @@ function App() {
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       return;
     }
+    if (mode === "classic" && (e.key === "[" || e.key === "]")) {
+      if (e.key === "[") {
+        setScale((prev) => Math.max(2, prev - 2));
+      } else if (e.key === "]") {
+        setScale((prev) => Math.min(32, prev + 2));
+      }
+      return;
+    }
     if (hoveredRegionIdxRef.current === null) return;
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
       e.preventDefault();
@@ -383,7 +391,7 @@ function App() {
 
   useEffect(() => {
     drawAllRegions();
-  }, [regions, mode]);
+  }, [regions, mode, scale]);
 
   // Effect to redraw the preview line when orientation changes
   useEffect(() => {
