@@ -20,6 +20,14 @@ function App() {
   const regionsRef = useRef(regions);
   const [scale, setScale] = useState(2); // For classic mode Bayer scale
 
+  // Audio playback state
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playheadY, setPlayheadY] = useState(0);
+  const audioContextRef = useRef(null);
+  const playheadIntervalRef = useRef(null);
+  const currentOscillatorsRef = useRef([]);
+  const gainNodeRef = useRef(null);
+
   const bayerMatrix = [
     [0, 48, 12, 60, 3, 51, 15, 63],
     [32, 16, 44, 28, 35, 19, 47, 31],
@@ -120,6 +128,180 @@ function App() {
     return Math.random(); // Returns a value between 0 and 1
   };
 
+  // Audio system functions
+  const initializeAudioContext = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      gainNodeRef.current = audioContextRef.current.createGain();
+      gainNodeRef.current.connect(audioContextRef.current.destination);
+      gainNodeRef.current.gain.value = 0.1; // Low volume for pleasant listening
+    }
+  };
+
+  // Musical scale mapping - using pentatonic scale for harmony
+  const pentatonicScale = [
+    261.63, // C4
+    293.66, // D4
+    329.63, // E4
+    392.00, // G4
+    440.00, // A4
+    523.25, // C5
+    587.33, // D5
+    659.25, // E5
+    783.99, // G5
+    880.00, // A5
+  ];
+
+  // Map pattern index to harmonic frequency
+  const getFrequencyFromPattern = (patternIdx, regionIdx) => {
+    // Use pattern index to determine base note
+    const baseNoteIndex = patternIdx % pentatonicScale.length;
+    // Add slight variation based on region index for harmony
+    const octaveShift = Math.floor(regionIdx / 5) % 2; // 0 or 1
+    return pentatonicScale[baseNoteIndex] * (octaveShift === 0 ? 1 : 0.5);
+  };
+
+  // Map color to harmonic overtones
+  const getOvertoneFromColor = (color) => {
+    // Convert hex color to hue value
+    const hex = color.replace('#', '');
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+    
+    // Simple hue calculation
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let hue = 0;
+    
+    if (max !== min) {
+      const delta = max - min;
+      switch (max) {
+        case r: hue = ((g - b) / delta) % 6; break;
+        case g: hue = (b - r) / delta + 2; break;
+        case b: hue = (r - g) / delta + 4; break;
+      }
+      hue *= 60;
+      if (hue < 0) hue += 360;
+    }
+    
+    // Map hue to harmonic intervals (perfect fifths, octaves, etc.)
+    const harmonicRatio = 1 + (hue / 360) * 0.5; // 1.0 to 1.5 ratio
+    return harmonicRatio;
+  };
+
+  const playToneForRegion = (region, regionIdx) => {
+    if (!audioContextRef.current) return;
+
+    const frequency = getFrequencyFromPattern(region.patternIdx, regionIdx);
+    const overtoneRatio = getOvertoneFromColor(region.color);
+    const brightness = region.brightness || 0.5;
+
+    // Create oscillator
+    const oscillator = audioContextRef.current.createOscillator();
+    const regionGain = audioContextRef.current.createGain();
+
+    // Set frequency and type based on brightness
+    oscillator.frequency.setValueAtTime(frequency * overtoneRatio, audioContextRef.current.currentTime);
+    oscillator.type = brightness > 0.7 ? 'sine' : brightness > 0.4 ? 'triangle' : 'square';
+
+    // Set volume based on region size
+    const canvas = canvasRef.current;
+    const regionSize = (region.w * region.h) / (canvas.width * canvas.height);
+    regionGain.gain.setValueAtTime(regionSize * 0.3, audioContextRef.current.currentTime);
+
+    // Connect nodes
+    oscillator.connect(regionGain);
+    regionGain.connect(gainNodeRef.current);
+
+    // Start and store reference
+    oscillator.start();
+    currentOscillatorsRef.current.push({ oscillator, gain: regionGain });
+
+    // Stop after a short duration
+    setTimeout(() => {
+      try {
+        oscillator.stop();
+        const index = currentOscillatorsRef.current.findIndex(item => item.oscillator === oscillator);
+        if (index > -1) {
+          currentOscillatorsRef.current.splice(index, 1);
+        }
+      } catch (e) {
+        // Oscillator might already be stopped
+      }
+    }, 150);
+  };
+
+  const stopAllOscillators = () => {
+    currentOscillatorsRef.current.forEach(({ oscillator }) => {
+      try {
+        oscillator.stop();
+      } catch (e) {
+        // Oscillator might already be stopped
+      }
+    });
+    currentOscillatorsRef.current = [];
+  };
+
+  // Playhead control functions
+  const startPlayback = () => {
+    if (!audioContextRef.current) {
+      initializeAudioContext();
+    }
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+
+    const canvas = canvasRef.current;
+    const playheadSpeed = 2; // pixels per frame at 60fps
+    const updateInterval = 16; // ~60fps
+
+         playheadIntervalRef.current = setInterval(() => {
+       setPlayheadY(prevY => {
+         const newY = prevY + playheadSpeed;
+         
+         // Check for regions intersecting the playhead
+         const currentRegions = regionsRef.current;
+         const intersectingRegions = currentRegions.filter(region => 
+           newY >= region.y && newY <= region.y + region.h &&
+           Math.abs(newY - region.y) < playheadSpeed * 2 // Small threshold for detection
+         );
+
+         // Play tones for intersecting regions
+         intersectingRegions.forEach((region, idx) => {
+           const regionIdx = currentRegions.indexOf(region);
+           playToneForRegion(region, regionIdx);
+         });
+
+         // Reset playhead when it reaches the bottom
+         if (newY >= canvas.height) {
+           return 0;
+         }
+         return newY;
+       });
+     }, updateInterval);
+
+    setIsPlaying(true);
+  };
+
+  const stopPlayback = () => {
+    if (playheadIntervalRef.current) {
+      clearInterval(playheadIntervalRef.current);
+      playheadIntervalRef.current = null;
+    }
+    stopAllOscillators();
+    setIsPlaying(false);
+  };
+
+  const togglePlayback = () => {
+    if (isPlaying) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
+  };
+
   const drawDitheredRect = (ctx, x, y, w, h, color, patternIdx, brightness) => {
     if (mode === "pattern") {
       console.log("Drawing region with patternIdx:", patternIdx);
@@ -155,34 +337,51 @@ function App() {
     ctx.strokeStyle = "white";
     ctx.lineWidth = 2;
 
-    // Draw the main line
-    ctx.beginPath();
-    if (useVerticalSplit) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height);
-    } else {
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-    }
-    ctx.stroke();
+    // Draw the main line (only if cursor is active and not playing)
+    if (isCursorActive && !isPlaying) {
+      ctx.beginPath();
+      if (useVerticalSplit) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+      } else {
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+      }
+      ctx.stroke();
 
-    // Draw the square indicator
-    const squareSize = 6;
-    ctx.fillStyle = "white";
-    if (useVerticalSplit) {
-      ctx.fillRect(
-        x - squareSize / 2,
-        y - squareSize / 2,
-        squareSize,
-        squareSize
-      );
-    } else {
-      ctx.fillRect(
-        x - squareSize / 2,
-        y - squareSize / 2,
-        squareSize,
-        squareSize
-      );
+      // Draw the square indicator
+      const squareSize = 6;
+      ctx.fillStyle = "white";
+      if (useVerticalSplit) {
+        ctx.fillRect(
+          x - squareSize / 2,
+          y - squareSize / 2,
+          squareSize,
+          squareSize
+        );
+      } else {
+        ctx.fillRect(
+          x - squareSize / 2,
+          y - squareSize / 2,
+          squareSize,
+          squareSize
+        );
+      }
+    }
+
+    // Draw the playhead (horizontal line that scans vertically)
+    if (isPlaying) {
+      ctx.strokeStyle = "#ff4444";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, playheadY);
+      ctx.lineTo(canvas.width, playheadY);
+      ctx.stroke();
+      
+      // Add a glowing effect
+      ctx.shadowColor = "#ff4444";
+      ctx.shadowBlur = 10;
+      ctx.stroke();
     }
 
     ctx.restore();
@@ -257,6 +456,11 @@ function App() {
       window.removeEventListener("resize", resizeCanvasOnly);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      // Cleanup audio on unmount
+      stopPlayback();
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
     };
   }, []);
 
@@ -275,7 +479,20 @@ function App() {
     modeRef.current = mode;
   }, [mode]);
 
+  useEffect(() => {
+    // Update preview canvas when playhead moves
+    if (isPlaying && previewCanvasRef.current) {
+      const ctx = previewCanvasRef.current.getContext("2d");
+      drawPreviewLine(ctx, mousePos.x, mousePos.y);
+    }
+  }, [playheadY, isPlaying, mousePos.x, mousePos.y]);
+
   const handleKeyDown = (e) => {
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      togglePlayback();
+      return;
+    }
     if (e.key === "Shift") {
       isShiftHeldRef.current = true;
       setIsShiftHeld(true);
@@ -598,6 +815,19 @@ function App() {
             cursor: "pointer",
           }}>
           Pattern Mode
+        </button>
+        <button
+          onClick={togglePlayback}
+          style={{
+            padding: "8px 16px",
+            backgroundColor: isPlaying ? "#ff4444" : "#44ff44",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer",
+            fontWeight: "bold",
+          }}>
+          {isPlaying ? "⏸️ Pause (Space)" : "▶️ Play (Space)"}
         </button>
       </div>
       <canvas
