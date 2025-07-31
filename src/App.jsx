@@ -22,11 +22,13 @@ function App() {
 
   // Audio playback state
   const [isPlaying, setIsPlaying] = useState(false);
+  const isPlayingRef = useRef(false);
   const [playheadY, setPlayheadY] = useState(0);
   const audioContextRef = useRef(null);
   const playheadIntervalRef = useRef(null);
   const currentOscillatorsRef = useRef([]);
   const gainNodeRef = useRef(null);
+  const activeRegionsRef = useRef(new Set()); // Track which regions are currently playing
 
   const bayerMatrix = [
     [0, 48, 12, 60, 3, 51, 15, 63],
@@ -131,116 +133,410 @@ function App() {
   // Audio system functions
   const initializeAudioContext = () => {
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext ||
+        window.webkitAudioContext)();
       gainNodeRef.current = audioContextRef.current.createGain();
       gainNodeRef.current.connect(audioContextRef.current.destination);
-      gainNodeRef.current.gain.value = 0.1; // Low volume for pleasant listening
+      gainNodeRef.current.gain.value = 0.5; // Increased volume for louder audio
     }
   };
 
-  // Musical scale mapping - using pentatonic scale for harmony
-  const pentatonicScale = [
-    261.63, // C4
-    293.66, // D4
-    329.63, // E4
-    392.00, // G4
-    440.00, // A4
-    523.25, // C5
-    587.33, // D5
-    659.25, // E5
-    783.99, // G5
-    880.00, // A5
-  ];
+  // Enhanced audio synthesis functions
+  const createADSRGain = (audioContext, attack, decay, sustain, release) => {
+    const gainNode = audioContext.createGain();
+    const now = audioContext.currentTime;
 
-  // Map pattern index to harmonic frequency
-  const getFrequencyFromPattern = (patternIdx, regionIdx) => {
-    // Use pattern index to determine base note
-    const baseNoteIndex = patternIdx % pentatonicScale.length;
-    // Add slight variation based on region index for harmony
-    const octaveShift = Math.floor(regionIdx / 5) % 2; // 0 or 1
-    return pentatonicScale[baseNoteIndex] * (octaveShift === 0 ? 1 : 0.5);
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(1, now + attack);
+    gainNode.gain.linearRampToValueAtTime(sustain, now + attack + decay);
+
+    return { gainNode, releaseTime: release };
   };
 
-  // Map color to harmonic overtones
+  const createFilter = (audioContext, type, frequency, q) => {
+    const filter = audioContext.createBiquadFilter();
+    filter.type = type;
+    filter.frequency.value = frequency;
+    filter.Q.value = q;
+    return filter;
+  };
+
+  const createReverb = (audioContext, decay, preDelay) => {
+    const convolver = audioContext.createConvolver();
+    const sampleRate = audioContext.sampleRate;
+    const length = sampleRate * decay;
+    const impulse = audioContext.createBuffer(2, length, sampleRate);
+
+    for (let channel = 0; channel < 2; channel++) {
+      const channelData = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i++) {
+        const delay = i - preDelay * sampleRate;
+        if (delay < 0) continue;
+        channelData[i] =
+          (Math.random() * 2 - 1) * Math.pow(1 - delay / length, 2);
+      }
+    }
+
+    convolver.buffer = impulse;
+    return convolver;
+  };
+
+  // Map pattern index to different synthesis characteristics
+  const getSynthesisParamsFromPattern = (patternIdx) => {
+    const patterns = [
+      // Pattern 0: Bright, percussive
+      {
+        waveform: "sawtooth",
+        adsr: { attack: 0.01, decay: 0.1, sustain: 0.3, release: 0.2 },
+        filter: { type: "highpass", frequency: 800, q: 2 },
+        reverb: { decay: 0.3, preDelay: 0.01 },
+      },
+      // Pattern 1: Warm, pad-like
+      {
+        waveform: "sine",
+        adsr: { attack: 0.5, decay: 0.3, sustain: 0.8, release: 1.0 },
+        filter: { type: "lowpass", frequency: 2000, q: 1 },
+        reverb: { decay: 1.5, preDelay: 0.05 },
+      },
+      // Pattern 2: Metallic, bell-like
+      {
+        waveform: "triangle",
+        adsr: { attack: 0.02, decay: 0.5, sustain: 0.1, release: 0.8 },
+        filter: { type: "bandpass", frequency: 1500, q: 8 },
+        reverb: { decay: 0.8, preDelay: 0.02 },
+      },
+      // Pattern 3: Bass, sub-like
+      {
+        waveform: "square",
+        adsr: { attack: 0.1, decay: 0.2, sustain: 0.9, release: 0.4 },
+        filter: { type: "lowpass", frequency: 400, q: 4 },
+        reverb: { decay: 0.2, preDelay: 0.01 },
+      },
+      // Pattern 4: Airy, wind-like
+      {
+        waveform: "sine",
+        adsr: { attack: 0.3, decay: 0.8, sustain: 0.4, release: 1.2 },
+        filter: { type: "highpass", frequency: 300, q: 1 },
+        reverb: { decay: 2.0, preDelay: 0.1 },
+      },
+      // Pattern 5: Sharp, pluck-like
+      {
+        waveform: "sawtooth",
+        adsr: { attack: 0.005, decay: 0.1, sustain: 0.1, release: 0.3 },
+        filter: { type: "lowpass", frequency: 3000, q: 2 },
+        reverb: { decay: 0.4, preDelay: 0.01 },
+      },
+      // Pattern 6: Mellow, string-like
+      {
+        waveform: "triangle",
+        adsr: { attack: 0.2, decay: 0.4, sustain: 0.7, release: 0.6 },
+        filter: { type: "lowpass", frequency: 1200, q: 3 },
+        reverb: { decay: 1.2, preDelay: 0.03 },
+      },
+      // Pattern 7: Bright, lead-like
+      {
+        waveform: "sawtooth",
+        adsr: { attack: 0.05, decay: 0.2, sustain: 0.6, release: 0.4 },
+        filter: { type: "highpass", frequency: 500, q: 1.5 },
+        reverb: { decay: 0.6, preDelay: 0.02 },
+      },
+      // Pattern 8: Deep, drone-like
+      {
+        waveform: "sine",
+        adsr: { attack: 1.0, decay: 0.5, sustain: 1.0, release: 2.0 },
+        filter: { type: "lowpass", frequency: 800, q: 2 },
+        reverb: { decay: 3.0, preDelay: 0.05 },
+      },
+      // Pattern 9: Crisp, digital-like
+      {
+        waveform: "square",
+        adsr: { attack: 0.01, decay: 0.05, sustain: 0.5, release: 0.1 },
+        filter: { type: "bandpass", frequency: 2000, q: 6 },
+        reverb: { decay: 0.2, preDelay: 0.005 },
+      },
+      // Pattern 10: Organic, wood-like
+      {
+        waveform: "triangle",
+        adsr: { attack: 0.1, decay: 0.3, sustain: 0.4, release: 0.8 },
+        filter: { type: "lowpass", frequency: 600, q: 5 },
+        reverb: { decay: 0.9, preDelay: 0.04 },
+      },
+      // Pattern 11: Ethereal, pad-like
+      {
+        waveform: "sine",
+        adsr: { attack: 0.8, decay: 0.6, sustain: 0.9, release: 1.5 },
+        filter: { type: "highpass", frequency: 200, q: 1 },
+        reverb: { decay: 2.5, preDelay: 0.08 },
+      },
+      // Pattern 12: Punchy, drum-like
+      {
+        waveform: "square",
+        adsr: { attack: 0.001, decay: 0.05, sustain: 0.1, release: 0.15 },
+        filter: { type: "bandpass", frequency: 1000, q: 4 },
+        reverb: { decay: 0.3, preDelay: 0.01 },
+      },
+      // Pattern 13: Smooth, vocal-like
+      {
+        waveform: "sine",
+        adsr: { attack: 0.15, decay: 0.2, sustain: 0.8, release: 0.5 },
+        filter: { type: "lowpass", frequency: 1800, q: 2.5 },
+        reverb: { decay: 1.0, preDelay: 0.02 },
+      },
+      // Pattern 14: Harsh, industrial-like
+      {
+        waveform: "sawtooth",
+        adsr: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.2 },
+        filter: { type: "highpass", frequency: 1200, q: 3 },
+        reverb: { decay: 0.5, preDelay: 0.01 },
+      },
+      // Pattern 15: Gentle, ambient-like
+      {
+        waveform: "triangle",
+        adsr: { attack: 0.4, decay: 0.8, sustain: 0.6, release: 1.8 },
+        filter: { type: "lowpass", frequency: 900, q: 1.5 },
+        reverb: { decay: 2.8, preDelay: 0.06 },
+      },
+      // Pattern 16: Dynamic, expressive-like
+      {
+        waveform: "sawtooth",
+        adsr: { attack: 0.08, decay: 0.3, sustain: 0.7, release: 0.7 },
+        filter: { type: "bandpass", frequency: 800, q: 3 },
+        reverb: { decay: 0.9, preDelay: 0.03 },
+      },
+      // Pattern 17: Mysterious, dark-like
+      {
+        waveform: "square",
+        adsr: { attack: 0.3, decay: 0.6, sustain: 0.5, release: 1.2 },
+        filter: { type: "lowpass", frequency: 300, q: 6 },
+        reverb: { decay: 1.8, preDelay: 0.07 },
+      },
+    ];
+
+    return patterns[patternIdx % patterns.length];
+  };
+
+  // Musical scale mapping - using only octaves, major thirds, and fifths
+  const baseFrequency = 261.63; // C4 as the root note
+
+  // Consonant intervals relative to the root:
+  // Octave: 2/1 ratio (2.0)
+  // Major third: 5/4 ratio (1.25)
+  // Perfect fifth: 3/2 ratio (1.5)
+  const consonantIntervals = [
+    1.0, // Root (unison)
+    1.25, // Major third
+    1.5, // Perfect fifth
+    2.0, // Octave
+  ];
+
+  // Map pattern index to harmonic frequency using only consonant intervals
+  const getFrequencyFromPattern = (patternIdx, regionIdx) => {
+    // Use pattern index to select a consonant interval
+    const intervalIndex = patternIdx % consonantIntervals.length;
+    const selectedInterval = consonantIntervals[intervalIndex];
+
+    // Add octave variation based on region index for additional harmony
+    const octaveShift = Math.floor(regionIdx / 6) % 3; // 0, 1, or 2 octaves
+    const octaveMultiplier = Math.pow(2, octaveShift);
+
+    return baseFrequency * selectedInterval * octaveMultiplier;
+  };
+
+  // Map color to consonant harmonic overtones
   const getOvertoneFromColor = (color) => {
     // Convert hex color to hue value
-    const hex = color.replace('#', '');
+    const hex = color.replace("#", "");
     const r = parseInt(hex.substr(0, 2), 16);
     const g = parseInt(hex.substr(2, 2), 16);
     const b = parseInt(hex.substr(4, 2), 16);
-    
+
     // Simple hue calculation
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
     let hue = 0;
-    
+
     if (max !== min) {
       const delta = max - min;
       switch (max) {
-        case r: hue = ((g - b) / delta) % 6; break;
-        case g: hue = (b - r) / delta + 2; break;
-        case b: hue = (r - g) / delta + 4; break;
+        case r:
+          hue = ((g - b) / delta) % 6;
+          break;
+        case g:
+          hue = (b - r) / delta + 2;
+          break;
+        case b:
+          hue = (r - g) / delta + 4;
+          break;
       }
       hue *= 60;
       if (hue < 0) hue += 360;
     }
-    
-    // Map hue to harmonic intervals (perfect fifths, octaves, etc.)
-    const harmonicRatio = 1 + (hue / 360) * 0.5; // 1.0 to 1.5 ratio
-    return harmonicRatio;
+
+    // Map hue to consonant intervals only (octaves, major thirds, fifths)
+    // Use the same consonant intervals as the main frequency mapping
+    const consonantOvertoneIntervals = [
+      1.0, // Root (unison)
+      1.25, // Major third
+      1.5, // Perfect fifth
+      2.0, // Octave
+    ];
+
+    // Map hue to one of the consonant intervals
+    const intervalIndex = Math.floor(
+      (hue / 360) * consonantOvertoneIntervals.length
+    );
+    return consonantOvertoneIntervals[intervalIndex];
   };
 
   const playToneForRegion = (region, regionIdx) => {
-    if (!audioContextRef.current) return;
+    if (!audioContextRef.current || !isPlayingRef.current) return;
+
+    // Check if this region is already playing
+    if (activeRegionsRef.current.has(regionIdx)) return;
 
     const frequency = getFrequencyFromPattern(region.patternIdx, regionIdx);
     const overtoneRatio = getOvertoneFromColor(region.color);
     const brightness = region.brightness || 0.5;
 
+    // Get synthesis parameters based on pattern
+    const synthParams = getSynthesisParamsFromPattern(region.patternIdx);
+
     // Create oscillator
     const oscillator = audioContextRef.current.createOscillator();
-    const regionGain = audioContextRef.current.createGain();
 
-    // Set frequency and type based on brightness
-    oscillator.frequency.setValueAtTime(frequency * overtoneRatio, audioContextRef.current.currentTime);
-    oscillator.type = brightness > 0.7 ? 'sine' : brightness > 0.4 ? 'triangle' : 'square';
+    // Set frequency and waveform type from pattern
+    oscillator.frequency.setValueAtTime(
+      frequency * overtoneRatio,
+      audioContextRef.current.currentTime
+    );
+    oscillator.type = synthParams.waveform;
+
+    // Create ADSR envelope
+    const { gainNode: adsrGain, releaseTime } = createADSRGain(
+      audioContextRef.current,
+      synthParams.adsr.attack,
+      synthParams.adsr.decay,
+      synthParams.adsr.sustain,
+      synthParams.adsr.release
+    );
+
+    // Create filter
+    const filter = createFilter(
+      audioContextRef.current,
+      synthParams.filter.type,
+      synthParams.filter.frequency,
+      synthParams.filter.q
+    );
+
+    // Create reverb
+    const reverb = createReverb(
+      audioContextRef.current,
+      synthParams.reverb.decay,
+      synthParams.reverb.preDelay
+    );
+
+    // Create reverb send (wet signal)
+    const reverbGain = audioContextRef.current.createGain();
+    reverbGain.gain.value = 0.3; // 30% reverb
 
     // Set volume based on region size
     const canvas = canvasRef.current;
     const regionSize = (region.w * region.h) / (canvas.width * canvas.height);
-    regionGain.gain.setValueAtTime(regionSize * 0.3, audioContextRef.current.currentTime);
+    const baseVolume = regionSize * 0.3;
 
-    // Connect nodes
-    oscillator.connect(regionGain);
-    regionGain.connect(gainNodeRef.current);
+    // Apply brightness to volume
+    const finalVolume = baseVolume * (0.5 + brightness * 0.5);
+    adsrGain.gain.setValueAtTime(
+      finalVolume,
+      audioContextRef.current.currentTime
+    );
+
+    // Connect the audio chain: oscillator -> filter -> ADSR -> reverb -> output
+    oscillator.connect(filter);
+    filter.connect(adsrGain);
+    adsrGain.connect(gainNodeRef.current); // Dry signal
+    adsrGain.connect(reverbGain); // Wet signal
+    reverbGain.connect(reverb);
+    reverb.connect(gainNodeRef.current);
 
     // Start and store reference
     oscillator.start();
-    currentOscillatorsRef.current.push({ oscillator, gain: regionGain });
+    currentOscillatorsRef.current.push({
+      oscillator,
+      gain: adsrGain,
+      filter,
+      reverb,
+      reverbGain,
+      regionIdx,
+      releaseTime,
+    });
 
-    // Stop after a short duration
-    setTimeout(() => {
+    // Mark this region as active
+    activeRegionsRef.current.add(regionIdx);
+  };
+
+  const stopToneForRegion = (regionIdx) => {
+    if (!audioContextRef.current) return;
+
+    // Find and stop the oscillator for this region
+    const oscillatorIndex = currentOscillatorsRef.current.findIndex(
+      (item) => item.regionIdx === regionIdx
+    );
+
+    if (oscillatorIndex > -1) {
+      const { oscillator, gain, releaseTime } =
+        currentOscillatorsRef.current[oscillatorIndex];
+
       try {
-        oscillator.stop();
-        const index = currentOscillatorsRef.current.findIndex(item => item.oscillator === oscillator);
-        if (index > -1) {
-          currentOscillatorsRef.current.splice(index, 1);
-        }
+        // Implement proper ADSR release
+        const now = audioContextRef.current.currentTime;
+        gain.gain.setValueAtTime(gain.gain.value, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + releaseTime);
+
+        // Stop the oscillator after release time
+        setTimeout(() => {
+          try {
+            oscillator.stop();
+          } catch (e) {
+            // Oscillator might already be stopped
+          }
+        }, releaseTime * 1000);
       } catch (e) {
         // Oscillator might already be stopped
       }
-    }, 150);
+
+      // Remove from current oscillators
+      currentOscillatorsRef.current.splice(oscillatorIndex, 1);
+    }
+
+    // Remove from active regions
+    activeRegionsRef.current.delete(regionIdx);
   };
 
   const stopAllOscillators = () => {
-    currentOscillatorsRef.current.forEach(({ oscillator }) => {
-      try {
-        oscillator.stop();
-      } catch (e) {
-        // Oscillator might already be stopped
+    currentOscillatorsRef.current.forEach(
+      ({ oscillator, gain, releaseTime }) => {
+        try {
+          // Implement proper ADSR release
+          const now = audioContextRef.current?.currentTime || 0;
+          gain.gain.setValueAtTime(gain.gain.value, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + releaseTime);
+
+          // Stop the oscillator after release time
+          setTimeout(() => {
+            try {
+              oscillator.stop();
+            } catch (e) {
+              // Oscillator might already be stopped
+            }
+          }, releaseTime * 1000);
+        } catch (e) {
+          // Oscillator might already be stopped
+        }
       }
-    });
+    );
     currentOscillatorsRef.current = [];
+    activeRegionsRef.current.clear();
   };
 
   // Playhead control functions
@@ -248,8 +544,8 @@ function App() {
     if (!audioContextRef.current) {
       initializeAudioContext();
     }
-    
-    if (audioContextRef.current.state === 'suspended') {
+
+    if (audioContextRef.current.state === "suspended") {
       audioContextRef.current.resume();
     }
 
@@ -257,31 +553,45 @@ function App() {
     const playheadSpeed = 2; // pixels per frame at 60fps
     const updateInterval = 16; // ~60fps
 
-         playheadIntervalRef.current = setInterval(() => {
-       setPlayheadY(prevY => {
-         const newY = prevY + playheadSpeed;
-         
-         // Check for regions intersecting the playhead
-         const currentRegions = regionsRef.current;
-         const intersectingRegions = currentRegions.filter(region => 
-           newY >= region.y && newY <= region.y + region.h &&
-           Math.abs(newY - region.y) < playheadSpeed * 2 // Small threshold for detection
-         );
+    playheadIntervalRef.current = setInterval(() => {
+      setPlayheadY((prevY) => {
+        const newY = prevY + playheadSpeed;
 
-         // Play tones for intersecting regions
-         intersectingRegions.forEach((region, idx) => {
-           const regionIdx = currentRegions.indexOf(region);
-           playToneForRegion(region, regionIdx);
-         });
+        // Check for regions intersecting the playhead
+        const currentRegions = regionsRef.current;
+        const intersectingRegions = currentRegions.filter(
+          (region) => newY >= region.y && newY <= region.y + region.h
+        );
 
-         // Reset playhead when it reaches the bottom
-         if (newY >= canvas.height) {
-           return 0;
-         }
-         return newY;
-       });
-     }, updateInterval);
+        // Get indices of intersecting regions
+        const intersectingRegionIndices = intersectingRegions.map((region) =>
+          currentRegions.indexOf(region)
+        );
 
+        // Start playing tones for newly intersecting regions
+        intersectingRegionIndices.forEach((regionIdx) => {
+          if (!activeRegionsRef.current.has(regionIdx)) {
+            playToneForRegion(currentRegions[regionIdx], regionIdx);
+          }
+        });
+
+        // Stop playing tones for regions that are no longer intersecting
+        const currentlyActiveIndices = Array.from(activeRegionsRef.current);
+        currentlyActiveIndices.forEach((regionIdx) => {
+          if (!intersectingRegionIndices.includes(regionIdx)) {
+            stopToneForRegion(regionIdx);
+          }
+        });
+
+        // Reset playhead when it reaches the bottom
+        if (newY >= canvas.height) {
+          return 0;
+        }
+        return newY;
+      });
+    }, updateInterval);
+
+    isPlayingRef.current = true;
     setIsPlaying(true);
   };
 
@@ -291,11 +601,12 @@ function App() {
       playheadIntervalRef.current = null;
     }
     stopAllOscillators();
+    isPlayingRef.current = false;
     setIsPlaying(false);
   };
 
   const togglePlayback = () => {
-    if (isPlaying) {
+    if (isPlayingRef.current) {
       stopPlayback();
     } else {
       startPlayback();
@@ -337,8 +648,8 @@ function App() {
     ctx.strokeStyle = "white";
     ctx.lineWidth = 2;
 
-    // Draw the main line (only if cursor is active and not playing)
-    if (isCursorActive && !isPlaying) {
+    // Draw the main cursor lines (always visible when cursor is active)
+    if (isCursorActive) {
       ctx.beginPath();
       if (useVerticalSplit) {
         ctx.moveTo(x, 0);
@@ -369,18 +680,19 @@ function App() {
       }
     }
 
-    // Draw the playhead (horizontal line that scans vertically)
+    // Draw the playhead (horizontal line that scans vertically) with transparency
     if (isPlaying) {
-      ctx.strokeStyle = "#ff4444";
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.3)"; // More transparent white
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(0, playheadY);
       ctx.lineTo(canvas.width, playheadY);
       ctx.stroke();
-      
-      // Add a glowing effect
-      ctx.shadowColor = "#ff4444";
-      ctx.shadowBlur = 10;
+
+      // Add a subtle glowing effect
+      ctx.shadowColor = "rgba(255, 255, 255, 0.15)";
+      ctx.shadowBlur = 8;
       ctx.stroke();
     }
 
@@ -478,6 +790,10 @@ function App() {
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   useEffect(() => {
     // Update preview canvas when playhead moves
